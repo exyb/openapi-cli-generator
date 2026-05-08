@@ -8,6 +8,7 @@ import (
 	{{ if .Imports.Strings }}"strings"{{ end }}
 	{{ if .Imports.Time }}"time"{{ end }}
 
+	"github.com/danielgtaylor/openapi-cli-generator/account"
 	"github.com/danielgtaylor/openapi-cli-generator/cli"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -26,6 +27,9 @@ import (
 			cmd.Flags().Float64("{{ .CLIName }}", 0.0, "{{ .Description }}")
 		{{- else }}
 			cmd.Flags().String("{{ .CLIName }}", "", "{{ .Description }}")
+		{{- end }}
+		{{- if .Required }}
+			cmd.MarkFlagRequired("{{ .CLIName }}")
 		{{- end }}
 	{{- end }}
 
@@ -61,6 +65,9 @@ func {{ $api }}Servers() []map[string]string {
 	// {{ $apiPublic }}{{ .GoName }} {{ .Short }}
 	func {{ $apiPublic }}{{ .GoName }}({{ range .RequiredParams }}{{ .GoName }} string, {{ end }}params *viper.Viper{{ if .CanHaveBody }}, body string{{ end }}) (*gentleman.Response, {{ .ReturnType }}, error) {
 		handlerPath := "{{ .HandlerName }}"
+		{{- if .Tag }}
+		handlerPath = "{{ .Tag }} " + handlerPath
+		{{- end }}
 		if {{ $api }}Subcommand {
 			handlerPath = "{{ $name }} " + handlerPath
 		}
@@ -80,23 +87,24 @@ func {{ $api }}Servers() []map[string]string {
 
 		req := cli.Client.{{ .Method }}().URL(url)
 
-		{{ range $i, $param := .RequiredParams }}
-			{{ if eq $param.In "query" }}
-				req = req.AddQuery("{{ .Name }}", {{ $param.GoName }})
-			{{ else if eq $param.In "header" }}
-				req = req.AddHeader("{{ .Name }}", {{ $param.GoName }})
-			{{ end }}
-		{{ end }}
-
 		{{- range .OptionalParams }}
-			{{ .GoName }} := params.Get{{ .Type | title }}("{{ .CLIName }}")
-			if {{ .GoName }} != {{ .TypeNil }} {
+			{{- if .Required }}
+				{{ .GoName }} := params.Get{{ .Type | title }}("{{ .CLIName }}")
 				{{- if eq .In "query" }}
 					req = req.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
 				{{- else if eq .In "header" }}
 					req = req.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
 				{{- end }}
-			}
+			{{- else }}
+				{{ .GoName }} := params.Get{{ .Type | title }}("{{ .CLIName }}")
+				if {{ .GoName }} != {{ .TypeNil }} {
+					{{- if eq .In "query" }}
+						req = req.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+					{{- else if eq .In "header" }}
+						req = req.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+					{{- end }}
+				}
+			{{- end }}
 		{{- end }}
 
 		{{ if .CanHaveBody }}
@@ -110,6 +118,49 @@ func {{ $api }}Servers() []map[string]string {
 		resp, err := req.Do()
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "Request failed")
+		}
+
+		if resp.StatusCode == 401 {
+			account.ForceRefresh()
+			req2 := cli.Client.{{ .Method }}().URL(url)
+
+			{{- range .OptionalParams }}
+				{{- if .Required }}
+					{{- if eq .In "query" }}
+						req2 = req2.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+					{{- else if eq .In "header" }}
+						req2 = req2.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+					{{- end }}
+				{{- else }}
+					if {{ .GoName }} != {{ .TypeNil }} {
+						{{- if eq .In "query" }}
+							req2 = req2.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+						{{- else if eq .In "header" }}
+							req2 = req2.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+						{{- end }}
+					}
+				{{- end }}
+			{{- end }}
+
+			{{ if .CanHaveBody }}
+				if body != "" {
+					req2 = req2.AddHeader("Content-Type", "{{ .MediaType }}").BodyString(body)
+				}
+			{{ end }}
+
+			cli.HandleBefore(handlerPath, params, req2)
+
+			resp2, err2 := req2.Do()
+			if err2 != nil {
+				return nil, nil, errors.Wrap(err2, "Request failed on retry after 401")
+			}
+
+			if resp2.StatusCode == 401 {
+				token := cli.Cache.GetString("profiles." + viper.GetString("profile") + ".token")
+				return nil, nil, errors.Errorf("HTTP 401: authentication failed even after token refresh (token=%s...%s)", token[:20], token[len(token)-10:])
+			}
+
+			resp = resp2
 		}
 
 		var decoded {{ .ReturnType }}
@@ -187,6 +238,17 @@ func {{ $api }}Register(subcommand bool) {
 		cli.Root.Short = "{{ .Title }}"
 		cli.Root.Long = cli.Markdown("{{ .Description }}")
 	}
+
+	{{ if .TagGroups }}
+		tagCommands := make(map[string]*cobra.Command)
+		{{ range $tagGroup := .TagGroups }}
+			tagCommands["{{ $tagGroup.Name }}"] = &cobra.Command{
+				Use: "{{ $tagGroup.Name }}",
+				Short: "{{ $tagGroup.Description }}",
+			}
+			root.AddCommand(tagCommands["{{ $tagGroup.Name }}"])
+		{{ end }}
+	{{ end }}
 
 	{{ if .Waiters }}
 		wait := &cobra.Command{
@@ -306,7 +368,11 @@ func {{ $api }}Register(subcommand bool) {
 					{{- end }}
 				},
 			}
+			{{- if .Tag }}
+			tagCommands["{{ .Tag }}"].AddCommand(cmd)
+			{{- else }}
 			root.AddCommand(cmd)
+			{{- end }}
 
 			{{ template "params" . }}
 		}()

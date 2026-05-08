@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ type Param struct {
 	Explode     bool
 }
 
+// TagGroup describes a group of operations sharing the same tag
+type TagGroup struct {
+	Name        string
+	Description string
+}
+
 // Operation describes an OpenAPI operation (GET/POST/PUT/PATCH/DELETE)
 type Operation struct {
 	HandlerName    string
@@ -65,6 +72,7 @@ type Operation struct {
 	Hidden         bool
 	NeedsResponse  bool
 	Waiters        []*WaiterParams
+	Tag            string
 }
 
 // Waiter describes a special command that blocks until a condition has been
@@ -125,11 +133,12 @@ type OpenAPI struct {
 	Servers      []*Server
 	Operations   []*Operation
 	Waiters      []*Waiter
+	TagGroups    []*TagGroup
 }
 
 // ProcessAPI returns the API description to be used with the commands template
 // for a loaded and dereferenced OpenAPI 3 document.
-func ProcessAPI(shortName string, api *openapi3.Swagger) *OpenAPI {
+func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAPI {
 	apiName := shortName
 	if api.Info.Extensions[ExtName] != nil {
 		apiName = extStr(api.Info.Extensions[ExtName])
@@ -146,6 +155,24 @@ func ProcessAPI(shortName string, api *openapi3.Swagger) *OpenAPI {
 		PublicGoName: toGoName(shortName, true),
 		Title:        api.Info.Title,
 		Description:  escapeString(apiDescription),
+	}
+
+	tagDescriptionMap := make(map[string]string)
+	var topLevelTags []struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal(rawData, &struct {
+		Tags *[]struct {
+			Name        string `yaml:"name"`
+			Description string `yaml:"description"`
+		} `yaml:"tags"`
+	}{
+		Tags: &topLevelTags,
+	}); err == nil {
+		for _, t := range topLevelTags {
+			tagDescriptionMap[t.Name] = t.Description
+		}
 	}
 
 	for _, s := range api.Servers {
@@ -280,6 +307,11 @@ func ProcessAPI(shortName string, api *openapi3.Swagger) *OpenAPI {
 				}
 			}
 
+			opTag := ""
+			if len(operation.Tags) > 0 {
+				opTag = operation.Tags[0]
+			}
+
 			o := &Operation{
 				HandlerName:    slug(name),
 				GoName:         toGoName(name, true),
@@ -297,6 +329,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger) *OpenAPI {
 				MediaType:      reqMt,
 				Examples:       examples,
 				Hidden:         hidden,
+				Tag:            opTag,
 			}
 
 			operationMap[operation.OperationID] = o
@@ -316,6 +349,22 @@ func ProcessAPI(shortName string, api *openapi3.Swagger) *OpenAPI {
 			}
 		}
 	}
+
+	tagSet := make(map[string]bool)
+	for _, op := range result.Operations {
+		if op.Tag != "" {
+			tagSet[op.Tag] = true
+		}
+	}
+	for tagName := range tagSet {
+		result.TagGroups = append(result.TagGroups, &TagGroup{
+			Name:        tagName,
+			Description: tagDescriptionMap[tagName],
+		})
+	}
+	sort.Slice(result.TagGroups, func(i, j int) bool {
+		return result.TagGroups[i].Name < result.TagGroups[j].Name
+	})
 
 	if api.Extensions[ExtWaiters] != nil {
 		var waiters map[string]*Waiter
@@ -419,8 +468,13 @@ func escapeString(value string) string {
 	return transformed
 }
 
+func stripNumericSuffix(operationID string) string {
+	re := regexp.MustCompile(`_\d+$`)
+	return re.ReplaceAllString(operationID, "")
+}
+
 func slug(operationID string) string {
-	transformed := strings.ToLower(operationID)
+	transformed := stripNumericSuffix(operationID)
 	transformed = strings.Replace(transformed, "_", "-", -1)
 	transformed = strings.Replace(transformed, " ", "-", -1)
 	return transformed
@@ -492,7 +546,7 @@ func getRequiredParams(allParams []*Param) []*Param {
 	required := make([]*Param, 0)
 
 	for _, param := range allParams {
-		if param.Required || param.In == "path" {
+		if param.In == "path" {
 			required = append(required, param)
 		}
 	}
@@ -504,7 +558,7 @@ func getOptionalParams(allParams []*Param) []*Param {
 	optional := make([]*Param, 0)
 
 	for _, param := range allParams {
-		if !param.Required && param.In != "path" {
+		if param.In != "path" {
 			optional = append(optional, param)
 		}
 	}
@@ -621,6 +675,8 @@ func generate(cmd *cobra.Command, args []string) {
 		log.Fatal(err)
 	}
 
+	rawData := data
+
 	// Load the OpenAPI document.
 	loader := openapi3.NewSwaggerLoader()
 	var swagger *openapi3.Swagger
@@ -643,7 +699,7 @@ func generate(cmd *cobra.Command, args []string) {
 
 	shortName := strings.TrimSuffix(path.Base(args[0]), ".yaml")
 
-	templateData := ProcessAPI(shortName, swagger)
+	templateData := ProcessAPI(shortName, swagger, rawData)
 
 	var sb strings.Builder
 	err = tmpl.Execute(&sb, templateData)

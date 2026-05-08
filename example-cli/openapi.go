@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/danielgtaylor/openapi-cli-generator/account"
 	"github.com/danielgtaylor/openapi-cli-generator/cli"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -60,6 +61,36 @@ func OpenapiEcho(params *viper.Viper, body string) (*gentleman.Response, map[str
 	resp, err := req.Do()
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "Request failed")
+	}
+
+	if resp.StatusCode == 401 {
+		account.ForceRefresh()
+		req2 := cli.Client.Post().URL(url)
+
+		if paramEchoQuery != "" {
+			req2 = req2.AddQuery("q", fmt.Sprintf("%v", paramEchoQuery))
+		}
+		if paramXRequestId != "" {
+			req2 = req2.AddHeader("x-request-id", fmt.Sprintf("%v", paramXRequestId))
+		}
+
+		if body != "" {
+			req2 = req2.AddHeader("Content-Type", "application/json").BodyString(body)
+		}
+
+		cli.HandleBefore(handlerPath, params, req2)
+
+		resp2, err2 := req2.Do()
+		if err2 != nil {
+			return nil, nil, errors.Wrap(err2, "Request failed on retry after 401")
+		}
+
+		if resp2.StatusCode == 401 {
+			token := cli.Cache.GetString("profiles." + viper.GetString("profile") + ".token")
+			return nil, nil, errors.Errorf("HTTP 401: authentication failed even after token refresh (token=%s...%s)", token[:20], token[len(token)-10:])
+		}
+
+		resp = resp2
 	}
 
 	var decoded map[string]interface{}
