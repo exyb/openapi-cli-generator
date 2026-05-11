@@ -88,23 +88,23 @@ func {{ $api }}Servers() []map[string]string {
 		req := cli.Client.{{ .Method }}().URL(url)
 
 		{{- range .OptionalParams }}
-			{{- if .Required }}
-				{{ .GoName }} := params.Get{{ .Type | title }}("{{ .CLIName }}")
+		{{- if .Required }}
+			{{ .GoName }} {{ if .Redeclare }}={{ else }}:={{ end }} params.Get{{ .Type | title }}("{{ .CLIName }}")
+			{{- if eq .In "query" }}
+				req = req.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+			{{- else if eq .In "header" }}
+				req = req.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
+			{{- end }}
+		{{- else }}
+			{{ .GoName }} {{ if .Redeclare }}={{ else }}:={{ end }} params.Get{{ .Type | title }}("{{ .CLIName }}")
+			if {{ .GoName }} != {{ .TypeNil }} {
 				{{- if eq .In "query" }}
 					req = req.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
 				{{- else if eq .In "header" }}
 					req = req.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
 				{{- end }}
-			{{- else }}
-				{{ .GoName }} := params.Get{{ .Type | title }}("{{ .CLIName }}")
-				if {{ .GoName }} != {{ .TypeNil }} {
-					{{- if eq .In "query" }}
-						req = req.AddQuery("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
-					{{- else if eq .In "header" }}
-						req = req.AddHeader("{{ .Name }}", fmt.Sprintf("%v", {{ .GoName }}))
-					{{- end }}
-				}
-			{{- end }}
+			}
+		{{- end }}
 		{{- end }}
 
 		{{ if .CanHaveBody }}

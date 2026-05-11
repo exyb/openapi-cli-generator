@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/format"
+	"go/scanner"
 	"io/ioutil"
 	"log"
 	"os"
@@ -44,6 +45,7 @@ type Param struct {
 	TypeNil     string
 	Style       string
 	Explode     bool
+	Redeclare   bool
 }
 
 // TagGroup describes a group of operations sharing the same tag
@@ -153,7 +155,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 		Name:         apiName,
 		GoName:       toGoName(shortName, false),
 		PublicGoName: toGoName(shortName, true),
-		Title:        api.Info.Title,
+		Title:        escapeString(api.Info.Title),
 		Description:  escapeString(apiDescription),
 	}
 
@@ -177,7 +179,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 
 	for _, s := range api.Servers {
 		result.Servers = append(result.Servers, &Server{
-			Description: s.Description,
+			Description: escapeString(s.Description),
 			URL:         s.URL,
 		})
 	}
@@ -276,6 +278,9 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 			}
 
 			method := strings.Title(strings.ToLower(method))
+			if method == "Options" {
+				method = "Head"
+			}
 
 			hidden := pathHidden
 			if operation.Extensions[ExtHidden] != nil {
@@ -317,7 +322,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 				GoName:         toGoName(name, true),
 				Use:            use,
 				Aliases:        aliases,
-				Short:          short,
+				Short:          escapeString(short),
 				Long:           escapeString(description),
 				Method:         method,
 				CanHaveBody:    method == "Post" || method == "Put" || method == "Patch",
@@ -330,6 +335,16 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 				Examples:       examples,
 				Hidden:         hidden,
 				Tag:            opTag,
+			}
+
+			requiredGoNames := make(map[string]bool)
+			for _, p := range requiredParams {
+				requiredGoNames[p.GoName] = true
+			}
+			for _, p := range optionalParams {
+				if requiredGoNames[p.GoName] {
+					p.Redeclare = true
+				}
 			}
 
 			operationMap[operation.OperationID] = o
@@ -359,7 +374,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 	for tagName := range tagSet {
 		result.TagGroups = append(result.TagGroups, &TagGroup{
 			Name:        tagName,
-			Description: tagDescriptionMap[tagName],
+			Description: escapeString(tagDescriptionMap[tagName]),
 		})
 	}
 	sort.Slice(result.TagGroups, func(i, j int) bool {
@@ -378,6 +393,8 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 			waiter.GoName = toGoName(name+"-waiter", true)
 			waiter.Operation = operationMap[waiter.OperationID]
 			waiter.Use = usage(name, waiter.Operation.RequiredParams)
+			waiter.Short = escapeString(waiter.Short)
+			waiter.Long = escapeString(waiter.Long)
 
 			for _, matcher := range waiter.Matchers {
 				if matcher.Test == "" {
@@ -469,6 +486,71 @@ func escapeString(value string) string {
 	return transformed
 }
 
+func buildYAMLContext(lines []string, targetLine int) (int, string) {
+	start := targetLine - 3
+	if start < 0 {
+		start = 0
+	}
+	end := targetLine + 3
+	if end >= len(lines) {
+		end = len(lines) - 1
+	}
+	var b strings.Builder
+	for j := start; j <= end; j++ {
+		marker := "  "
+		if j == targetLine {
+			marker = ">>"
+		}
+		fmt.Fprintf(&b, "%s %4d: %s\n", marker, j+1, lines[j])
+	}
+	return targetLine + 1, b.String()
+}
+
+var yamlBooleanValues = []string{
+	"true", "True", "TRUE",
+	"false", "False", "FALSE",
+	"yes", "Yes", "YES",
+	"no", "No", "NO",
+	"on", "On", "ON",
+	"off", "Off", "OFF",
+	"y", "Y", "n", "N",
+}
+
+func findYAMLProblemLine(rawData []byte, errMsg string) (int, string) {
+	re := regexp.MustCompile(`property '([^']+)'`)
+	matches := re.FindAllStringSubmatch(errMsg, -1)
+	var properties []string
+	for _, m := range matches {
+		if len(m) > 1 {
+			properties = append(properties, m[1])
+		}
+	}
+
+	isBoolMismatch := strings.Contains(errMsg, "cannot unmarshal bool")
+	lines := strings.Split(string(rawData), "\n")
+
+	for i := len(properties) - 1; i >= 0; i-- {
+		propName := properties[i]
+		for lineNum, line := range lines {
+			trimmed := strings.TrimSpace(line)
+
+			if isBoolMismatch {
+				for _, bv := range yamlBooleanValues {
+					if trimmed == propName+": "+bv || trimmed == propName+":"+bv {
+						return buildYAMLContext(lines, lineNum)
+					}
+				}
+			} else {
+				if strings.Contains(line, propName) {
+					return buildYAMLContext(lines, lineNum)
+				}
+			}
+		}
+	}
+
+	return -1, ""
+}
+
 func stripNumericSuffix(operationID string) string {
 	re := regexp.MustCompile(`_\d+$`)
 	return re.ReplaceAllString(operationID, "")
@@ -531,7 +613,7 @@ func getParams(path *openapi3.PathItem, httpMethod string) []*Param {
 				Name:        p.Value.Name,
 				CLIName:     cliName,
 				GoName:      toGoName("param "+cliName, false),
-				Description: description,
+				Description: escapeString(description),
 				In:          p.Value.In,
 				Required:    p.Value.Required,
 				Type:        t,
@@ -638,7 +720,34 @@ func writeFormattedFile(filename string, data []byte) {
 
 	err := ioutil.WriteFile(filename, formatted, 0600)
 	if errFormat != nil {
-		panic(errFormat)
+		var errMsg strings.Builder
+		fmt.Fprintf(&errMsg, "Failed to format generated Go file %s:\n  %v\n", filename, errFormat)
+
+		goLines := strings.Split(string(data), "\n")
+		if errList, ok := errFormat.(scanner.ErrorList); ok && len(errList) > 0 {
+			firstErr := errList[0]
+			ln := firstErr.Pos.Line
+			if ln > 0 && ln <= len(goLines) {
+				start := ln - 3
+				if start < 1 {
+					start = 1
+				}
+				end := ln + 3
+				if end > len(goLines) {
+					end = len(goLines)
+				}
+				fmt.Fprintf(&errMsg, "\nGenerated Go file context around line %d:\n", ln)
+				for j := start; j <= end; j++ {
+					marker := "  "
+					if j == ln {
+						marker = ">>"
+					}
+					fmt.Fprintf(&errMsg, "%s %5d: %s\n", marker, j, goLines[j-1])
+				}
+			}
+		}
+
+		panic(errMsg.String())
 	} else if err != nil {
 		panic(err)
 	}
@@ -683,7 +792,16 @@ func generate(cmd *cobra.Command, args []string) {
 	var swagger *openapi3.Swagger
 	swagger, err = loader.LoadSwaggerFromData(data)
 	if err != nil {
-		log.Fatal(err)
+		var errMsg strings.Builder
+		fmt.Fprintf(&errMsg, "Failed to load OpenAPI document from %s:\n  %v\n", args[0], err)
+
+		yamlLine, yamlCtx := findYAMLProblemLine(rawData, err.Error())
+		if yamlLine > 0 {
+			fmt.Fprintf(&errMsg, "\nProblem seems related to YAML file %s line %d:\n", args[0], yamlLine)
+			errMsg.WriteString(yamlCtx)
+		}
+
+		log.Fatal(errMsg.String())
 	}
 
 	funcs := template.FuncMap{
