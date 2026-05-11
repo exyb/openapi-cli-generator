@@ -463,7 +463,8 @@ func toGoName(input string, public bool) string {
 }
 
 func escapeString(value string) string {
-	transformed := strings.Replace(value, "\n", "\\n", -1)
+	transformed := strings.Replace(value, "\\", "\\\\", -1)
+	transformed = strings.Replace(transformed, "\n", "\\n", -1)
 	transformed = strings.Replace(transformed, "\"", "\\\"", -1)
 	return transformed
 }
