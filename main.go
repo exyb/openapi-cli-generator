@@ -31,6 +31,7 @@ const (
 	ExtHidden      = "x-cli-hidden"
 	ExtName        = "x-cli-name"
 	ExtWaiters     = "x-cli-waiters"
+	ExtXCli        = "x-cli"
 )
 
 // Param describes an OpenAPI parameter (path, query, header, etc)
@@ -52,6 +53,32 @@ type Param struct {
 type TagGroup struct {
 	Name        string
 	Description string
+	Path        string
+	ParentPath  string
+}
+
+// XCli describes the x-cli extension for advanced CLI generation
+type XCli struct {
+	Domain   string          `json:"domain"`
+	Resource string          `json:"resource"`
+	Action   json.RawMessage `json:"action"`
+	Verb     string          `json:"verb"`
+	Hidden   bool            `json:"hidden"`
+}
+
+func (x *XCli) GetAction() string {
+	if x.Action == nil {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(x.Action, &s); err == nil {
+		return s
+	}
+	var b bool
+	if err := json.Unmarshal(x.Action, &b); err == nil {
+		return fmt.Sprintf("%v", b)
+	}
+	return string(x.Action)
 }
 
 // Operation describes an OpenAPI operation (GET/POST/PUT/PATCH/DELETE)
@@ -136,11 +163,12 @@ type OpenAPI struct {
 	Operations   []*Operation
 	Waiters      []*Waiter
 	TagGroups    []*TagGroup
+	EnableXCliDravh bool
 }
 
 // ProcessAPI returns the API description to be used with the commands template
 // for a loaded and dereferenced OpenAPI 3 document.
-func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAPI {
+func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableXCliDravh bool) *OpenAPI {
 	apiName := shortName
 	if api.Info.Extensions[ExtName] != nil {
 		apiName = extStr(api.Info.Extensions[ExtName])
@@ -152,11 +180,12 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 	}
 
 	result := &OpenAPI{
-		Name:         apiName,
-		GoName:       toGoName(shortName, false),
-		PublicGoName: toGoName(shortName, true),
-		Title:        escapeString(api.Info.Title),
-		Description:  escapeString(apiDescription),
+		Name:           apiName,
+		GoName:         toGoName(shortName, false),
+		PublicGoName:   toGoName(shortName, true),
+		Title:          escapeString(api.Info.Title),
+		Description:    escapeString(apiDescription),
+		EnableXCliDravh: enableXCliDravh,
 	}
 
 	tagDescriptionMap := make(map[string]string)
@@ -186,6 +215,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 
 	// Convenience map for operation ID -> operation
 	operationMap := make(map[string]*Operation)
+	goNameCount := make(map[string]int)
 
 	var keys []string
 	for path := range api.Paths {
@@ -208,8 +238,24 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 
 		for method, operation := range item.Operations() {
 			if operation.Extensions[ExtIgnore] != nil {
-				// Ignore this operation.
 				continue
+			}
+
+			var xCli *XCli
+			if operation.Extensions[ExtXCli] != nil {
+				xCli = &XCli{}
+				if err := json.Unmarshal(operation.Extensions[ExtXCli].(json.RawMessage), xCli); err != nil {
+					panic(fmt.Errorf("failed to parse x-cli extension: %v", err))
+				}
+			}
+
+			if result.EnableXCliDravh {
+				if xCli == nil {
+					continue
+				}
+				if xCli.Hidden {
+					continue
+				}
 			}
 
 			name := operation.OperationID
@@ -313,13 +359,42 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 			}
 
 			opTag := ""
-			if len(operation.Tags) > 0 {
-				opTag = operation.Tags[0]
+			goNameInput := name
+			if result.EnableXCliDravh && xCli != nil {
+				if action := xCli.GetAction(); action != "" {
+					name = action
+				}
+				use = slug(name)
+				for _, p := range requiredParams {
+					use += " " + slug(p.Name)
+				}
+				resourceSegments := []string{}
+				if xCli.Resource != "" {
+					resourceSegments = strings.Split(strings.Trim(xCli.Resource, "/"), "/")
+				}
+				pathParts := []string{xCli.Domain}
+				pathParts = append(pathParts, resourceSegments...)
+				opTag = strings.Join(pathParts, "/")
+				goNameInput = xCli.Domain
+				for _, seg := range resourceSegments {
+					goNameInput += "-" + seg
+				}
+				goNameInput += "-" + name
+			} else {
+				if len(operation.Tags) > 0 {
+					opTag = operation.Tags[0]
+				}
+			}
+
+			goName := toGoName(goNameInput, true)
+			goNameCount[goName]++
+			if goNameCount[goName] > 1 {
+				goName = fmt.Sprintf("%s%d", goName, goNameCount[goName])
 			}
 
 			o := &Operation{
 				HandlerName:    slug(name),
-				GoName:         toGoName(name, true),
+				GoName:         goName,
 				Use:            use,
 				Aliases:        aliases,
 				Short:          escapeString(short),
@@ -371,15 +446,44 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte) *OpenAP
 			tagSet[op.Tag] = true
 		}
 	}
-	for tagName := range tagSet {
-		result.TagGroups = append(result.TagGroups, &TagGroup{
-			Name:        tagName,
-			Description: escapeString(tagDescriptionMap[tagName]),
+
+	if result.EnableXCliDravh {
+		tagGroupSet := make(map[string]bool)
+		for tagPath := range tagSet {
+			segments := strings.Split(tagPath, "/")
+			for i := 1; i <= len(segments); i++ {
+				parentPath := strings.Join(segments[:i], "/")
+				if !tagGroupSet[parentPath] {
+					tagGroupSet[parentPath] = true
+					parentPathForGroup := ""
+					if i > 1 {
+						parentPathForGroup = strings.Join(segments[:i-1], "/")
+					}
+					result.TagGroups = append(result.TagGroups, &TagGroup{
+						Name:        segments[i-1],
+						Description: "",
+						Path:        parentPath,
+						ParentPath:  parentPathForGroup,
+					})
+				}
+			}
+		}
+		sort.Slice(result.TagGroups, func(i, j int) bool {
+			return result.TagGroups[i].Path < result.TagGroups[j].Path
+		})
+	} else {
+		for tagName := range tagSet {
+			result.TagGroups = append(result.TagGroups, &TagGroup{
+				Name:        tagName,
+				Description: escapeString(tagDescriptionMap[tagName]),
+				Path:        tagName,
+				ParentPath:  "",
+			})
+		}
+		sort.Slice(result.TagGroups, func(i, j int) bool {
+			return result.TagGroups[i].Name < result.TagGroups[j].Name
 		})
 	}
-	sort.Slice(result.TagGroups, func(i, j int) bool {
-		return result.TagGroups[i].Name < result.TagGroups[j].Name
-	})
 
 	if api.Extensions[ExtWaiters] != nil {
 		var waiters map[string]*Waiter
@@ -780,6 +884,8 @@ func initCmd(cmd *cobra.Command, args []string) {
 }
 
 func generate(cmd *cobra.Command, args []string) {
+	enableXCliDravh, _ := cmd.Flags().GetBool("x-cli-dravh")
+
 	data, err := ioutil.ReadFile(args[0])
 	if err != nil {
 		log.Fatal(err)
@@ -818,7 +924,7 @@ func generate(cmd *cobra.Command, args []string) {
 
 	shortName := strings.TrimSuffix(path.Base(args[0]), ".yaml")
 
-	templateData := ProcessAPI(shortName, swagger, rawData)
+	templateData := ProcessAPI(shortName, swagger, rawData, enableXCliDravh)
 
 	var sb strings.Builder
 	err = tmpl.Execute(&sb, templateData)
@@ -839,12 +945,14 @@ func main() {
 		Run:   initCmd,
 	})
 
-	root.AddCommand(&cobra.Command{
+	genCmd := &cobra.Command{
 		Use:   "generate <api-spec>",
 		Short: "Generate a `commands.go` file from an OpenAPI spec",
 		Args:  cobra.ExactArgs(1),
 		Run:   generate,
-	})
+	}
+	genCmd.Flags().Bool("x-cli-dravh", false, "Enable x-cli driven command generation (filter by x-cli, use domain/resource/action for command hierarchy)")
+	root.AddCommand(genCmd)
 
 	root.Execute()
 }

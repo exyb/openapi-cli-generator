@@ -242,11 +242,15 @@ func {{ $api }}Register(subcommand bool) {
 	{{ if .TagGroups }}
 		tagCommands := make(map[string]*cobra.Command)
 		{{ range $tagGroup := .TagGroups }}
-			tagCommands["{{ $tagGroup.Name }}"] = &cobra.Command{
+			tagCommands["{{ $tagGroup.Path }}"] = &cobra.Command{
 				Use: "{{ $tagGroup.Name }}",
 				Short: "{{ $tagGroup.Description }}",
 			}
-			root.AddCommand(tagCommands["{{ $tagGroup.Name }}"])
+			{{ if $tagGroup.ParentPath }}
+				tagCommands["{{ $tagGroup.ParentPath }}"].AddCommand(tagCommands["{{ $tagGroup.Path }}"])
+			{{ else }}
+				root.AddCommand(tagCommands["{{ $tagGroup.Path }}"])
+			{{ end }}
 		{{ end }}
 	{{ end }}
 
