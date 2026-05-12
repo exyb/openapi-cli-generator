@@ -1,7 +1,9 @@
 package main
 
 import (
+	"github.com/danielgtaylor/openapi-cli-generator/account"
 	"github.com/danielgtaylor/openapi-cli-generator/cli"
+	"github.com/spf13/viper"
 )
 
 func main() {
@@ -10,6 +12,14 @@ func main() {
 		EnvPrefix: "{{ .NameEnv }}",
 		Version:   "1.0.0",
 	})
+
+	account.Init("{{ .NameEnv }}", account.ServerURL(func() string {
+		server := viper.GetString("server")
+		if server == "" {
+			server = openapiServers()[viper.GetInt("server-index")]["url"]
+		}
+		return server
+	}))
 
 	// TODO: Add register commands here.
 
