@@ -166,9 +166,154 @@ type OpenAPI struct {
 	EnableXCliDravh bool
 }
 
+type PathPattern struct {
+	PathRegex *regexp.Regexp
+	Methods   map[string]bool
+	RawLine   string
+}
+
+type PathFilter struct {
+	Patterns []PathPattern
+	IsAllow  bool
+}
+
+func isHTTPMethod(s string) bool {
+	switch strings.ToUpper(s) {
+	case "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE", "CONNECT":
+		return true
+	}
+	return false
+}
+
+func pathPatternToRegex(pattern string) string {
+	var regexStr strings.Builder
+	i := 0
+	for i < len(pattern) {
+		ch := pattern[i]
+		if ch == '[' {
+			j := strings.IndexByte(pattern[i+1:], ']')
+			if j >= 0 {
+				regexStr.WriteString(`\{[^/]+\}`)
+				i += j + 2
+				continue
+			}
+			regexStr.WriteString(`\[`)
+			i++
+			continue
+		}
+		if ch == ']' {
+			regexStr.WriteString(`\]`)
+			i++
+			continue
+		}
+		if ch == '*' {
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				regexStr.WriteString(`.+`)
+				i += 2
+				continue
+			}
+			regexStr.WriteString(`[^/]+`)
+			i++
+			continue
+		}
+		if ch == '.' || ch == '+' || ch == '?' || ch == '(' || ch == ')' ||
+			ch == '|' || ch == '{' || ch == '}' || ch == '^' || ch == '$' || ch == '\\' {
+			regexStr.WriteByte('\\')
+		}
+		regexStr.WriteByte(ch)
+		i++
+	}
+	return "^" + regexStr.String() + "$"
+}
+
+func parsePathPattern(line string) (PathPattern, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return PathPattern{}, false
+	}
+
+	var pathPart, methodPart string
+	if idx := strings.LastIndex(line, ":"); idx >= 0 {
+		potentialMethods := line[idx+1:]
+		parts := strings.Split(potentialMethods, "|")
+		allMethods := len(parts) > 0
+		for _, p := range parts {
+			if !isHTTPMethod(strings.TrimSpace(p)) {
+				allMethods = false
+				break
+			}
+		}
+		if allMethods {
+			pathPart = line[:idx]
+			methodPart = potentialMethods
+		} else {
+			pathPart = line
+		}
+	} else {
+		pathPart = line
+	}
+
+	regexStr := pathPatternToRegex(pathPart)
+
+	var methods map[string]bool
+	if methodPart != "" {
+		methods = make(map[string]bool)
+		for _, m := range strings.Split(methodPart, "|") {
+			methods[strings.ToUpper(strings.TrimSpace(m))] = true
+		}
+	}
+
+	return PathPattern{
+		PathRegex: regexp.MustCompile(regexStr),
+		Methods:   methods,
+		RawLine:   line,
+	}, true
+}
+
+func loadPathFilter(filename string, isAllow bool) *PathFilter {
+	data, err := ioutil.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("Failed to read filter file %s: %v", filename, err)
+	}
+
+	filter := &PathFilter{IsAllow: isAllow}
+	for _, line := range strings.Split(string(data), "\n") {
+		if pattern, ok := parsePathPattern(line); ok {
+			filter.Patterns = append(filter.Patterns, pattern)
+		}
+	}
+
+	if len(filter.Patterns) == 0 {
+		log.Fatalf("No valid patterns found in filter file %s", filename)
+	}
+
+	return filter
+}
+
+func (f *PathFilter) IsAllowed(path string, method string) bool {
+	matched := false
+	for _, pattern := range f.Patterns {
+		if pattern.PathRegex.MatchString(path) {
+			if pattern.Methods == nil {
+				matched = true
+				break
+			}
+			if pattern.Methods[strings.ToUpper(method)] {
+				matched = true
+				break
+			}
+		}
+	}
+
+	if f.IsAllow {
+		return matched
+	}
+	return !matched
+}
+
 // ProcessAPI returns the API description to be used with the commands template
 // for a loaded and dereferenced OpenAPI 3 document.
-func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableXCliDravh bool) *OpenAPI {
+func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableXCliDravh bool, pathFilter *PathFilter) *OpenAPI {
 	apiName := shortName
 	if api.Info.Extensions[ExtName] != nil {
 		apiName = extStr(api.Info.Extensions[ExtName])
@@ -238,6 +383,10 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableX
 
 		for method, operation := range item.Operations() {
 			if operation.Extensions[ExtIgnore] != nil {
+				continue
+			}
+
+			if pathFilter != nil && !pathFilter.IsAllowed(path, method) {
 				continue
 			}
 
@@ -885,6 +1034,19 @@ func initCmd(cmd *cobra.Command, args []string) {
 
 func generate(cmd *cobra.Command, args []string) {
 	enableXCliDravh, _ := cmd.Flags().GetBool("x-cli-dravh")
+	allowListFile, _ := cmd.Flags().GetString("allow-list")
+	disallowListFile, _ := cmd.Flags().GetString("disallow-list")
+
+	if allowListFile != "" && disallowListFile != "" {
+		log.Fatal("--allow-list and --disallow-list are mutually exclusive")
+	}
+
+	var pathFilter *PathFilter
+	if allowListFile != "" {
+		pathFilter = loadPathFilter(allowListFile, true)
+	} else if disallowListFile != "" {
+		pathFilter = loadPathFilter(disallowListFile, false)
+	}
 
 	data, err := ioutil.ReadFile(args[0])
 	if err != nil {
@@ -924,7 +1086,7 @@ func generate(cmd *cobra.Command, args []string) {
 
 	shortName := strings.TrimSuffix(path.Base(args[0]), ".yaml")
 
-	templateData := ProcessAPI(shortName, swagger, rawData, enableXCliDravh)
+	templateData := ProcessAPI(shortName, swagger, rawData, enableXCliDravh, pathFilter)
 
 	var sb strings.Builder
 	err = tmpl.Execute(&sb, templateData)
@@ -952,6 +1114,8 @@ func main() {
 		Run:   generate,
 	}
 	genCmd.Flags().Bool("x-cli-dravh", false, "Enable x-cli driven command generation (filter by x-cli, use domain/resource/action for command hierarchy)")
+	genCmd.Flags().String("allow-list", "", "File containing allowed API paths (whitelist, mutually exclusive with --disallow-list)")
+	genCmd.Flags().String("disallow-list", "", "File containing disallowed API paths (blacklist, mutually exclusive with --allow-list)")
 	root.AddCommand(genCmd)
 
 	root.Execute()
