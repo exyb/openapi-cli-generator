@@ -130,6 +130,14 @@ func Init(config *Config) {
 		Run:   showHelpInput,
 	})
 
+	Root.AddCommand(&cobra.Command{
+		Use:   "search <keyword> [keyword...]",
+		Short: "Search commands by keyword",
+		Long:  "Search for commands matching one or more keywords. Matches against command names, aliases, and short descriptions.",
+		Args:  cobra.MinimumNArgs(1),
+		Run:   searchCommands,
+	})
+
 	AddGlobalFlag("verbose", "", "Enable verbose log output", false)
 	AddGlobalFlag("output-format", "o", "Output format [json, yaml]", "json")
 	AddGlobalFlag("query", "q", "Filter / project results using JMESPath", "")
@@ -290,6 +298,82 @@ See https://github.com/danielgtaylor/openapi-cli-generator/tree/master/shorthand
 	fmt.Fprintln(Stdout, Markdown(strings.Replace(help, "¬", "`", -1)))
 }
 
+func searchCommands(cmd *cobra.Command, args []string) {
+	keywords := make([]string, len(args))
+	for i, a := range args {
+		keywords[i] = strings.ToLower(a)
+	}
+
+	type result struct {
+		path  string
+		short string
+	}
+	var results []result
+	walkCommands(Root, "", func(cmdPath string, c *cobra.Command) {
+		if c == Root {
+			return
+		}
+		lowerPath := strings.ToLower(cmdPath)
+		name := strings.ToLower(c.Name())
+		short := strings.ToLower(c.Short)
+		var aliases []string
+		for _, a := range c.Aliases {
+			aliases = append(aliases, strings.ToLower(a))
+		}
+
+		matched := true
+		for _, kw := range keywords {
+			found := false
+			if strings.Contains(lowerPath, kw) {
+				found = true
+			}
+			if !found && strings.Contains(name, kw) {
+				found = true
+			}
+			if !found && strings.Contains(short, kw) {
+				found = true
+			}
+			if !found {
+				for _, a := range aliases {
+					if strings.Contains(a, kw) {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			results = append(results, result{path: cmdPath, short: c.Short})
+		}
+	})
+
+	for _, r := range results {
+		if r.short != "" {
+			fmt.Fprintf(Stdout, "%s # %s\n", r.path, r.short)
+		} else {
+			fmt.Fprintln(Stdout, r.path)
+		}
+	}
+}
+
+func walkCommands(parent *cobra.Command, prefix string, fn func(cmdPath string, c *cobra.Command)) {
+	for _, c := range parent.Commands() {
+		cmdPath := c.Name()
+		if prefix != "" {
+			cmdPath = prefix + " " + cmdPath
+		}
+		fn(cmdPath, c)
+		if c.HasSubCommands() {
+			walkCommands(c, cmdPath, fn)
+		}
+	}
+}
+
 func helpTemplate() string {
 	return `{{with or .Long .Short }}{{. | trimTrailingWhitespaces}}
 
@@ -297,10 +381,10 @@ func helpTemplate() string {
   {{.UseLine}}{{end}}{{if .HasSubCommands}}
   {{.CommandPath}} [command]{{end}}
 
-{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (not .IsAdditionalHelpTopicCommand)}}
+{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (ne .Name "search") (not .IsAdditionalHelpTopicCommand)}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
-Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input")}}
+Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input") (eq .Name "search")}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
 {{end}}{{if .HasAvailableLocalFlags}}Flags:
