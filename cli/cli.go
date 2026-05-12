@@ -138,6 +138,15 @@ func Init(config *Config) {
 		Run:   searchCommands,
 	})
 
+	treeCmd := &cobra.Command{
+		Use:   "tree",
+		Short: "Display command tree structure",
+		Long:  "Display all commands in a tree structure. Use -L to limit the depth level.",
+		Run:   treeCommands,
+	}
+	treeCmd.Flags().IntP("level", "L", 0, "Max display depth of the command tree (0 = unlimited)")
+	Root.AddCommand(treeCmd)
+
 	AddGlobalFlag("verbose", "", "Enable verbose log output", false)
 	AddGlobalFlag("output-format", "o", "Output format [json, yaml]", "json")
 	AddGlobalFlag("query", "q", "Filter / project results using JMESPath", "")
@@ -374,6 +383,64 @@ func walkCommands(parent *cobra.Command, prefix string, fn func(cmdPath string, 
 	}
 }
 
+func treeCommands(cmd *cobra.Command, args []string) {
+	maxDepth, _ := cmd.Flags().GetInt("level")
+	printTree(Root, 0, maxDepth, true)
+}
+
+func printTree(cmd *cobra.Command, depth, maxDepth int, isLast bool) {
+	if cmd == Root {
+		fmt.Fprintln(Stdout, cmd.Name())
+	} else {
+		prefix := ""
+		for i := 0; i < depth-1; i++ {
+			prefix += "│   "
+		}
+		if depth > 0 {
+			if isLast {
+				prefix += "└── "
+			} else {
+				prefix += "├── "
+			}
+		}
+		label := cmd.Name()
+		if cmd.Short != "" {
+			label += "  " + cmd.Short
+		}
+		fmt.Fprintln(Stdout, prefix+label)
+	}
+
+	if maxDepth > 0 && depth >= maxDepth {
+		return
+	}
+
+	seen := make(map[string]bool)
+	var filtered []*cobra.Command
+	internalNames := map[string]bool{
+		"help":        true,
+		"setup":       true,
+		"help-config": true,
+		"help-input":  true,
+		"search":      true,
+		"tree":        true,
+	}
+	for _, c := range cmd.Commands() {
+		name := c.Name()
+		if internalNames[name] {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		filtered = append(filtered, c)
+	}
+
+	for i, c := range filtered {
+		printTree(c, depth+1, maxDepth, i == len(filtered)-1)
+	}
+}
+
 func helpTemplate() string {
 	return `{{with or .Long .Short }}{{. | trimTrailingWhitespaces}}
 
@@ -381,10 +448,10 @@ func helpTemplate() string {
   {{.UseLine}}{{end}}{{if .HasSubCommands}}
   {{.CommandPath}} [command]{{end}}
 
-{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (ne .Name "search") (not .IsAdditionalHelpTopicCommand)}}
+{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (ne .Name "search") (ne .Name "tree") (not .IsAdditionalHelpTopicCommand)}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
-Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input") (eq .Name "search")}}
+Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input") (eq .Name "search") (eq .Name "tree")}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
 {{end}}{{if .HasAvailableLocalFlags}}Flags:
