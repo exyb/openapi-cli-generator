@@ -102,6 +102,7 @@ type Operation struct {
 	NeedsResponse  bool
 	Waiters        []*WaiterParams
 	Tag            string
+	MCPToolName    string
 }
 
 // Waiter describes a special command that blocks until a condition has been
@@ -361,6 +362,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableX
 	// Convenience map for operation ID -> operation
 	operationMap := make(map[string]*Operation)
 	goNameCount := make(map[string]int)
+	mcpToolNameCount := make(map[string]int)
 
 	var keys []string
 	for path := range api.Paths {
@@ -561,6 +563,18 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableX
 				Tag:            opTag,
 			}
 
+			mcpToolName := slug(name)
+			if opTag != "" {
+				tagPart := strings.Replace(opTag, "/", "_", -1)
+				tagPart = strings.Replace(tagPart, " ", "_", -1)
+				mcpToolName = tagPart + "_" + mcpToolName
+			}
+			mcpToolNameCount[mcpToolName]++
+			if mcpToolNameCount[mcpToolName] > 1 {
+				mcpToolName = fmt.Sprintf("%s%d", mcpToolName, mcpToolNameCount[mcpToolName])
+			}
+			o.MCPToolName = mcpToolName
+
 			requiredGoNames := make(map[string]bool)
 			for _, p := range requiredParams {
 				requiredGoNames[p.GoName] = true
@@ -705,6 +719,7 @@ func ProcessAPI(shortName string, api *openapi3.Swagger, rawData []byte, enableX
 			result.Imports.Time = true
 		}
 	}
+
 
 	return result
 }

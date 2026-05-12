@@ -381,4 +381,51 @@ func {{ $api }}Register(subcommand bool) {
 			{{ template "params" . }}
 		}()
 	{{ end }}
+
+	{{ range $operation := .Operations }}
+		{
+			cli.RegisterMCPTool(cli.MCPToolInfo{
+				Name: "{{ $operation.MCPToolName }}",
+				Description: "{{ $operation.Short }}",
+				Params: []cli.MCPParamInfo{
+					{{- range $operation.RequiredParams }}
+					{Name: "{{ .CLIName }}", Type: "{{ .Type }}", Description: "{{ .Description }}", Required: true},
+					{{- end }}
+					{{- range $operation.OptionalParams }}
+					{Name: "{{ .CLIName }}", Type: "{{ .Type }}", Description: "{{ .Description }}", Required: {{ .Required }}},
+					{{- end }}
+				},
+				HasBody: {{ .CanHaveBody }},
+				Handler: func(args map[string]interface{}) (interface{}, error) {
+					{{- range $i, $param := .RequiredParams }}
+					{{ $param.GoName }}{{ if $param.Redeclare }}={{ else }}:={{ end }} ""
+					if v, ok := args["{{ $param.CLIName }}"].(string); ok {
+						{{ $param.GoName }} = v
+					}
+					{{- end }}
+					params := viper.New()
+					{{- range .OptionalParams }}
+					if v, ok := args["{{ .CLIName }}"]; ok {
+						switch v := v.(type) {
+						case string:
+							if v != "" {
+								params.Set("{{ .CLIName }}", v)
+							}
+						case float64:
+							params.Set("{{ .CLIName }}", v)
+						case bool:
+							params.Set("{{ .CLIName }}", v)
+						}
+					}
+					{{- end }}
+					{{ if .CanHaveBody }}body := cli.MCPBodyArg(args){{ end }}
+					_, decoded, err := {{ $apiPublic }}{{ .GoName }}({{ range $x, $param := .RequiredParams }}{{ $param.GoName }}, {{ end }}params{{ if .CanHaveBody }}, body{{ end }})
+					if err != nil {
+						return nil, err
+					}
+					return decoded, nil
+				},
+			})
+		}
+	{{ end }}
 }

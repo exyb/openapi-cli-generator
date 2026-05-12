@@ -147,6 +147,26 @@ func Init(config *Config) {
 	treeCmd.Flags().IntP("level", "L", 0, "Max display depth of the command tree (0 = unlimited)")
 	Root.AddCommand(treeCmd)
 
+	mcpCmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "MCP server commands",
+	}
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start MCP server",
+		Long: `Start a Model Context Protocol (MCP) server that exposes CLI operations as tools for AI agents.
+
+Transport modes (mutually exclusive):
+  --transport stdio           stdin/stdout (default)
+  --transport streamable-http Streamable HTTP (recommended for HTTP, MCP 2025-03-26 spec)
+  --transport sse             Server-Sent Events (legacy HTTP transport)`,
+		Run: startMCPServer,
+	}
+	serveCmd.Flags().StringP("transport", "t", "stdio", "Transport mode: stdio, streamable-http, sse")
+	serveCmd.Flags().IntP("port", "p", 8080, "HTTP listen port (only used with streamable-http or sse)")
+	mcpCmd.AddCommand(serveCmd)
+	Root.AddCommand(mcpCmd)
+
 	AddGlobalFlag("verbose", "", "Enable verbose log output", false)
 	AddGlobalFlag("output-format", "o", "Output format [json, yaml]", "json")
 	AddGlobalFlag("query", "q", "Filter / project results using JMESPath", "")
@@ -423,6 +443,7 @@ func printTree(cmd *cobra.Command, depth, maxDepth int, isLast bool) {
 		"help-input":  true,
 		"search":      true,
 		"tree":        true,
+		"mcp":         true,
 	}
 	for _, c := range cmd.Commands() {
 		name := c.Name()
@@ -448,10 +469,10 @@ func helpTemplate() string {
   {{.UseLine}}{{end}}{{if .HasSubCommands}}
   {{.CommandPath}} [command]{{end}}
 
-{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (ne .Name "search") (ne .Name "tree") (not .IsAdditionalHelpTopicCommand)}}
+{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (ne .Name "search") (ne .Name "tree") (ne .Name "mcp") (not .IsAdditionalHelpTopicCommand)}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
-Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input") (eq .Name "search") (eq .Name "tree")}}
+Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input") (eq .Name "search") (eq .Name "tree") (eq .Name "mcp")}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
 
 {{end}}{{if .HasAvailableLocalFlags}}Flags:
