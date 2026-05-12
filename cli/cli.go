@@ -116,6 +116,8 @@ func Init(config *Config) {
 
 	Root.SetOutput(Stdout)
 
+	Root.SetHelpTemplate(helpTemplate())
+
 	Root.AddCommand(&cobra.Command{
 		Use:   "help-config",
 		Short: "Show CLI configuration help",
@@ -286,4 +288,30 @@ Use an ¬@¬ to load the contents of a file as the value, like ¬key: @filename�
 See https://github.com/danielgtaylor/openapi-cli-generator/tree/master/shorthand#readme for more info.`
 
 	fmt.Fprintln(Stdout, Markdown(strings.Replace(help, "¬", "`", -1)))
+}
+
+func helpTemplate() string {
+	return `{{with or .Long .Short }}{{. | trimTrailingWhitespaces}}
+
+{{end}}{{if or .Runnable .HasSubCommands}}Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasSubCommands}}
+  {{.CommandPath}} [command]{{end}}
+
+{{end}}{{if .HasSubCommands}}Available Commands:{{range .Commands}}{{if and (ne .Name "help") (ne .Name "setup") (ne .Name "help-config") (ne .Name "help-input") (not .IsAdditionalHelpTopicCommand)}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
+
+Internal Commands:{{range .Commands}}{{if or (eq .Name "setup") (eq .Name "help-config") (eq .Name "help-input")}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}
+
+{{end}}{{if .HasAvailableLocalFlags}}Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}
+
+{{end}}{{if .HasAvailableInheritedFlags}}Global Flags:
+{{.InheritedFlags.FlagUsages | trimTrailingWhitespaces}}
+
+{{end}}{{if .HasHelpSubCommands}}Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}
+
+{{end}}{{if .HasSubCommands}}Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
 }

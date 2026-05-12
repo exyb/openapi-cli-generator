@@ -44,8 +44,8 @@ func initAuth() {
 
 	// Add base auth commands
 	authCommand = &cobra.Command{
-		Use:   "auth",
-		Short: "Authentication settings",
+		Use:   "setup",
+		Short: "Setup CLI configuration including authentication",
 	}
 	Root.AddCommand(authCommand)
 
@@ -100,7 +100,7 @@ func initAuth() {
 					table.Render()
 				}
 			} else {
-				fmt.Printf("No profiles configured. Use `%s auth add-profile` to add one.\n", Root.CommandPath())
+				fmt.Printf("No profiles configured. Use `%s setup add-profile` to add one.\n", Root.CommandPath())
 			}
 		},
 	})
@@ -247,8 +247,8 @@ func InitCredentials(options ...func(*CredentialsFile) error) {
 
 	// Register auth management commands to create and list profiles.
 	cmd := &cobra.Command{
-		Use:   "auth",
-		Short: "Authentication settings",
+		Use:   "setup",
+		Short: "Setup CLI configuration including authentication",
 	}
 	Root.AddCommand(cmd)
 
@@ -297,7 +297,7 @@ func InitCredentials(options ...func(*CredentialsFile) error) {
 				}
 				table.Render()
 			} else {
-				fmt.Printf("No profiles configured. Use `%s auth add-profile` to add one.\n", Root.CommandPath())
+				fmt.Printf("No profiles configured. Use `%s setup add-profile` to add one.\n", Root.CommandPath())
 			}
 		},
 	})
