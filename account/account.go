@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danielgtaylor/openapi-cli-generator/cli"
+	"github.com/danielgtaylor/openapi-toolkit/cli"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )

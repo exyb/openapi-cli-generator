@@ -1,8 +1,8 @@
 package auth0
 
 import (
-	"github.com/danielgtaylor/openapi-cli-generator/cli"
-	"github.com/danielgtaylor/openapi-cli-generator/oauth"
+	"github.com/danielgtaylor/openapi-toolkit/cli"
+	"github.com/danielgtaylor/openapi-toolkit/oauth"
 )
 
 type config struct {

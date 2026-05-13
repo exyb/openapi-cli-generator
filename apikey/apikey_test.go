@@ -3,7 +3,7 @@ package apikey
 import (
 	"testing"
 
-	"github.com/danielgtaylor/openapi-cli-generator/cli"
+	"github.com/danielgtaylor/openapi-toolkit/cli"
 	"github.com/stretchr/testify/assert"
 )
 

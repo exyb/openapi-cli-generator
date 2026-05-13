@@ -1,4 +1,4 @@
-module github.com/danielgtaylor/openapi-cli-generator
+module github.com/danielgtaylor/openapi-toolkit
 
 go 1.25.5
 
