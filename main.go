@@ -1099,7 +1099,13 @@ func generate(cmd *cobra.Command, args []string) {
 		panic(err)
 	}
 
-	shortName := strings.TrimSuffix(path.Base(args[0]), ".yaml")
+	shortName := path.Base(args[0])
+	shortName = strings.TrimSuffix(shortName, ".yaml")
+	shortName = strings.TrimSuffix(shortName, ".json")
+	shortName = strings.TrimSuffix(shortName, ".yml")
+	if shortName != "openapi" {
+		shortName = "openapi"
+	}
 
 	templateData := ProcessAPI(shortName, swagger, rawData, enableXCliDravh, pathFilter)
 
