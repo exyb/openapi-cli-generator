@@ -165,6 +165,8 @@ type OpenAPI struct {
 	Waiters      []*Waiter
 	TagGroups    []*TagGroup
 	EnableXCliDravh bool
+	AccountAESKey  string
+	AccountAESIV   string
 }
 
 type PathPattern struct {
@@ -1051,6 +1053,8 @@ func generate(cmd *cobra.Command, args []string) {
 	enableXCliDravh, _ := cmd.Flags().GetBool("x-cli-dravh")
 	allowListFile, _ := cmd.Flags().GetString("allow-list")
 	disallowListFile, _ := cmd.Flags().GetString("disallow-list")
+	accountAESKey, _ := cmd.Flags().GetString("account-aes-key")
+	accountAESIV, _ := cmd.Flags().GetString("account-aes-iv")
 
 	if allowListFile != "" && disallowListFile != "" {
 		log.Fatal("--allow-list and --disallow-list are mutually exclusive")
@@ -1108,6 +1112,8 @@ func generate(cmd *cobra.Command, args []string) {
 	}
 
 	templateData := ProcessAPI(shortName, swagger, rawData, enableXCliDravh, pathFilter)
+	templateData.AccountAESKey = accountAESKey
+	templateData.AccountAESIV = accountAESIV
 
 	var sb strings.Builder
 	err = tmpl.Execute(&sb, templateData)
@@ -1137,6 +1143,8 @@ func main() {
 	genCmd.Flags().Bool("x-cli-dravh", false, "Enable x-cli driven command generation (filter by x-cli, use domain/resource/action for command hierarchy)")
 	genCmd.Flags().String("allow-list", "", "File containing allowed API paths (whitelist, mutually exclusive with --disallow-list)")
 	genCmd.Flags().String("disallow-list", "", "File containing disallowed API paths (blacklist, mutually exclusive with --allow-list)")
+	genCmd.Flags().String("account-aes-key", "", "Override the AES key used for account credential encryption")
+	genCmd.Flags().String("account-aes-iv", "", "Override the AES IV used for account credential encryption")
 	root.AddCommand(genCmd)
 
 	root.Execute()

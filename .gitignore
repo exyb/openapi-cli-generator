@@ -3,3 +3,4 @@ vendor
 test
 example-cli/main.go-e
 *-cli/
+build/

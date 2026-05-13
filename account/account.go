@@ -18,10 +18,18 @@ import (
 	"github.com/spf13/viper"
 )
 
-const (
+var (
 	aesKey = "change-key-here-"
 	aesIV  = "change-iv-here--"
 )
+
+func SetAESKey(key string) {
+	aesKey = key
+}
+
+func SetAESIV(iv string) {
+	aesIV = iv
+}
 
 type config struct {
 	typeName    string
