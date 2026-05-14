@@ -430,4 +430,8 @@ func {{ $api }}Register(subcommand bool) {
 			})
 		}
 	{{ end }}
+
+	if subcommand {
+		cli.Root.AddCommand(root)
+	}
 }

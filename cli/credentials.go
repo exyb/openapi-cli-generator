@@ -109,9 +109,15 @@ func initAuth() {
 	Client.UseRequest(func(ctx *context.Context, h context.Handler) {
 		profile := GetProfile()
 
-		handler := AuthHandlers[profile["type"]]
+		authType := profile["type"]
+		if authType == "" {
+			h.Next(ctx)
+			return
+		}
+
+		handler := AuthHandlers[authType]
 		if handler == nil {
-			h.Error(ctx, fmt.Errorf("no handler for auth type %s", profile["type"]))
+			h.Error(ctx, fmt.Errorf("no handler for auth type %s", authType))
 			return
 		}
 

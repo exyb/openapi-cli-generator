@@ -1125,7 +1125,10 @@ func generate(cmd *cobra.Command, args []string) {
 }
 
 func main() {
-	root := &cobra.Command{}
+	root := &cobra.Command{
+		Use:   "openapi-toolkit",
+		Short: "OpenAPI CLI generator and MCP gateway",
+	}
 
 	root.AddCommand(&cobra.Command{
 		Use:   "init <app-name>",
@@ -1146,6 +1149,33 @@ func main() {
 	genCmd.Flags().String("account-aes-key", "", "Override the AES key used for account credential encryption")
 	genCmd.Flags().String("account-aes-iv", "", "Override the AES IV used for account credential encryption")
 	root.AddCommand(genCmd)
+
+	genCLICmd := &cobra.Command{
+		Use:   "gen-cli",
+		Short: "Generate a CLI binary from an OpenAPI spec in one step",
+		Run:   runGenCLI,
+	}
+	genCLICmd.Flags().String("name", "", "CLI name (required, used as route ID part)")
+	genCLICmd.Flags().String("spec-file", "", "OpenAPI spec file path (YAML or JSON, required)")
+	genCLICmd.Flags().String("server-url", "", "Override the backend server URL in the generated CLI")
+	genCLICmd.Flags().String("xcli-mode", "", "XCLI extension mode (currently only 'dravh')")
+	genCLICmd.Flags().String("allow-list-file", "", "Whitelist file for API path filtering")
+	genCLICmd.Flags().String("disallow-list-file", "", "Blacklist file for API path filtering")
+	genCLICmd.Flags().String("platform", "", "Target platform(s) for cross-compilation (e.g. linux/amd64,darwin/arm64)")
+	genCLICmd.Flags().Bool("install", false, "Install the generated binary to $GOPATH/bin")
+	root.AddCommand(genCLICmd)
+
+	mcpGatewayCmd := &cobra.Command{
+		Use:   "mcp-gateway",
+		Short: "Start an MCP gateway server that auto-generates and manages MCP servers",
+		Run:   runMCPGateway,
+	}
+	mcpGatewayCmd.Flags().String("host", "0.0.0.0", "Gateway listen host")
+	mcpGatewayCmd.Flags().Int("port", 9090, "Gateway listen port")
+	mcpGatewayCmd.Flags().String("data-dir", "", "Data directory for gateway storage (default: ./gateway-data)")
+	mcpGatewayCmd.Flags().String("db-driver", "sqlite3", "Database driver (sqlite3, mysql, postgres)")
+	mcpGatewayCmd.Flags().String("db-dsn", "", "Database DSN (default: <data-dir>/gateway.db)")
+	root.AddCommand(mcpGatewayCmd)
 
 	root.Execute()
 }
